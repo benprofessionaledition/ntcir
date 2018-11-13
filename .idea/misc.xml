@@ -78,9 +78,6 @@
       <textMaps />
     </LinkMapSettings>
   </component>
-  <component name="ProjectDictionaryState">
-    <dictionary name="ben.levine" />
-  </component>
   <component name="ProjectRootManager" version="2" languageLevel="JDK_1_8" project-jdk-name="Python 3.6 (ntcir)" project-jdk-type="Python SDK">
     <output url="file://$PROJECT_DIR$/out" />
   </component>
