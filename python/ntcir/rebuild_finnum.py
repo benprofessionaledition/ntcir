@@ -7,6 +7,7 @@ Created on Wed Jul 11 09:41:57 2018
 """
 
 import logging
+import time
 
 logging.basicConfig(
     format='%(asctime)s %(levelname)-s: %(message)s',
@@ -100,7 +101,7 @@ if __name__ == '__main__':
             elif tweet_info["response"]["status"] == 429:
                 print("next url...")
                 j += 1
-                chkpt = fname + "_rebuilt.json.ckpt-" + str(j)
+                chkpt = fname + "_rebuilt.json.ckpt-" + str(time.time())
                 log.warning("token exhausted, dumping checkpoint to %s", chkpt)
                 json.dump(data, open(chkpt, 'w'))
                 token = next_token(j)
