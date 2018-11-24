@@ -43,14 +43,15 @@ consumer_secret = ["a667a3968e7497f150207d265ca26a611821e516", "a9eac5f14adc8e70
 
 redirect_url = "http://www.google.com"
 
-code = ["6ee651e5a1d692f6e00d86d44c7d2da51d75cfa7", "27e042cd91d437b1a55ff952153ea4b55d7c324e",
-        "9c9159773a137382ea2d1934b1b2cd030049b913", "f6594051d0be9514fe5b24c57c4839afcbf3fa67",
-        "3b69edb98c376e500f1a66910df0b12b73adbca7", "9eac02e38303c7e78394796904c6c8fa957e3aae",
-        "4c1fd8a3d610f0daa0552e458a862a483471ad25", "21f76b2e286b9aae0249db26229ff567aac1b7f0",
-        "84fc2a89f69c2870d667823df704ab73dfc6d1f4", "ea4e239ebc5d8c3348beb75636ed52a7159d2b9a",
-        "cd0c8eaae71e3f03a3a1e1feeb38f2eab376a48c", "3e4f62f4e22e8603501339de383b4f9d5b898a1e",
-        "eadd5d233711a43f4ad7a3f64e2563773504a997", "3532a35c200f809cd570c84f3b2f5c37e63de08d",
-        "76eaa19b47d3c8c64cae3408a0faae343b75b78b"]
+# these expire apparently so you need new ones
+code = ["16182a66fb98dd604b2d04736b8b1b54e5f9ff1a", "7a168744513614932c42fb8f6e43cff6bdced763",
+        "a6d079739e9e9b4db3e49a4b655a318e5f667e65", "a380cf89f20f6f3209440c712db1cdbff58d7a27",
+        "9b94c23324808f38d97b92ed5d876b9871b4b4f8", "a10ae0bf0b530352f8fe86c4bb5cfe963ba2dfc8",
+        "f16da79451095243c3a3508350c43df5e8bffb82", "8d6123a81e2849845122b8a54bac9e1271993e11",
+        "9e7e6a6756aa0d1388fb627768993610a0b7dac8", "6149c82ac339bc71d65db2856424d064a054f8cb",
+        "3e66a35006994c5bc5777b31806148e4823ccda8", "dd297f2dd9d504d6e63c79f932aa889d17c66f66",
+        "8df66881b101212135f339fb42b46851f3fa9c2b", "7e622c0411890060594c8c7c6486b1f1fc02bc21",
+        "258a3d26bc8bac6ec99e71c46e45bef65a248467"]
 
 
 def next_token(j: int) -> str:
@@ -80,7 +81,7 @@ if __name__ == '__main__':
         twt = []
         idx = []
 
-        i = 0
+        i = 4072
         while i != len(data):
             print(i)
             if data[i]["idx"] in idx:
