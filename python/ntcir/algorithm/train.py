@@ -1,16 +1,17 @@
 """
 trainin
 """
-import json
 import logging
-
-from ntcir.algorithm import algorithm
-
 logging.basicConfig(
     format='%(asctime)s %(levelname)-s: %(message)s',
     level=logging.DEBUG,
     datefmt='%Y-%m-%d %H:%M:%S')
 log = logging.getLogger(__name__)
+log.propagate = False
+
+import json
+
+from ntcir.algorithm import algorithm
 
 import glob
 import functools
@@ -29,9 +30,8 @@ run_modes = {'eval': tf.estimator.ModeKeys.EVAL,
 def init_flags():
 
     # global run options
-    tf.flags.DEFINE_string("mode", "", "the run mode")
+    tf.flags.DEFINE_string("mode", "train", "the run mode")
     tf.flags.DEFINE_boolean("debug", False, "Whether to run with a tfdbg session (this won't work in an IDE)")
-    tf.flags.DEFINE_boolean("dry_run", False, "If true, this script won't create checkpoint files. For debugging locally to make sure stuff compiles and runs")
 
     # files
     tf.flags.DEFINE_string("vocab_file", "", "newline-delimited vocabulary file")
@@ -41,6 +41,8 @@ def init_flags():
     tf.flags.DEFINE_string("input_tags_file", "", "corresponding tags for the input data")
     tf.flags.DEFINE_string("eval_data_file", "", "newline-delimited sentences for evaluation")
     tf.flags.DEFINE_string("eval_tags_file", "", "corresponding tags for the eval data")
+    tf.flags.DEFINE_string("glove_file", "", "compressed glove vectors (.npz)")
+    tf.flags.DEFINE_string("empty_tag", "<O>", "tag signifying no relevant info (default: <O>)")
 
     # general files
     tf.flags.DEFINE_string("checkpoints", os.path.join(os.getcwd(), "checkpoints"), "checkpoint directory")
@@ -57,6 +59,7 @@ def init_flags():
     tf.flags.DEFINE_integer("conv_filters", 64, "Number of convolution filters (default: 64)")
     tf.flags.DEFINE_integer("conv_kernel_size", 2, "Convolution kernel size (default: 2)")
     tf.flags.DEFINE_integer("lstm_size", 100, "LSTM depth (default: 100)")
+    tf.flags.DEFINE_integer("buffer", 15000, "not sure (default: 15000)")
 
     # general hyperparameters
     tf.flags.DEFINE_float("learning_rate", 1e-2, "Initial Learning Rate (default: 1e-2)")
@@ -113,30 +116,6 @@ def generator_fn(words, tags):
         for line_words, line_tags in zip(f_words, f_tags):
             yield parse_fn(line_words, line_tags)
 
-def input_fn(words, tags, params=None, shuffle_and_repeat=False):
-    params = params if params is not None else {}
-    shapes = ((([None], ()),               # (words, nwords)
-               ([None, None], [None])),    # (chars, nchars)
-              [None])                      # tags
-    types = (((tf.string, tf.int32),
-              (tf.string, tf.int32)),
-             tf.string)
-    defaults = ((('<pad>', 0),
-                 ('<pad>', 0)),
-                params.get('empty_tag'),'<O>')
-    dataset = tf.data.Dataset.from_generator(
-        functools.partial(generator_fn, words, tags),
-        output_shapes=shapes, output_types=types)
-
-    if shuffle_and_repeat:
-        dataset = dataset.shuffle(params['buffer']).repeat(params['epochs'])
-
-    dataset = (dataset
-               .padded_batch(params.get('batch_size', 20), shapes, defaults)
-               .prefetch(1))
-    return dataset
-
-
 def make_parent_directory(path):
     parent = os.path.abspath(os.path.join(path, os.pardir))
     if not os.path.exists(parent):
@@ -161,11 +140,9 @@ def most_recent_checkpoint(checkpoints, name):
 if __name__ == '__main__':
     init_flags()
     flags = tf.flags.FLAGS
-    tf.logging.set_verbosity(tf.logging.INFO)
+    tf.logging.set_verbosity(tf.logging.DEBUG)
 
     runmode = run_modes[flags.mode]
-    data_directory = flags.data_directory
-
     # create checkpoint/logdir stuff
     name = str(int(time.time())) + '-' + flags.name
     # mkdirs
@@ -183,29 +160,54 @@ if __name__ == '__main__':
         hooks.append(tf_debug.LocalCLIDebugHook())
         hooks.append(tf.train.LoggingTensorHook(tensors=['IteratorGetNext:0', 'IteratorGetNext:1'], every_n_iter=1))
 
+    with open(flags.tags_file) as t_f:
+        tags = t_f.readlines()
     # Params
     params = {
         'vocab_file' : flags.vocab_file,
-        'char_vocab_file' : flags.char_file,
+        'char_file' : flags.char_file,
         'word_embedding_dim' : flags.word_embedding_dim,
         'char_embedding_dim' : flags.char_embedding_dim,
-        'tags' : flags.tags,
-        'glove_location' : flags.glove_location,
-        'dropout_pct' : flags.dropout_pct,
-        'use_gpu' : flags.gpu,
+        'tags' : tags,
+        'tags_file' : flags.tags_file,
+        'glove_location' : flags.glove_file,
+        'dropout_pct' : flags.dropout_keep_prob,
+        'use_gpu' : flags.use_gpu,
         'empty_tag' : flags.empty_tag,
-        'num_oov_word_buckets' : flags.num_vocab_oov_buckets,
+        'num_oov_word_buckets' : flags.num_oov_word_buckets,
         'num_oov_char_buckets' : flags.num_oov_char_buckets,
-        'epochs' : flags.epochs,
+        'epochs' : flags.num_epochs,
         'batch_size' : flags.batch_size,
         'buffer' : flags.buffer,
-        'filters' : flags.filters,
-        'kernel_size' : flags.kernel_size,
+        'filters' : flags.conv_filters,
+        'kernel_size' : flags.conv_kernel_size,
         'lstm_size' : flags.lstm_size,
     }
 
     model_fn = algorithm.model_fn
 
+    def input_fn(words, tags, params=None, shuffle_and_repeat=False):
+        params = params if params is not None else {}
+        shapes = ((([None], ()),               # (words, nwords)
+                   ([None, None], [None])),    # (chars, nchars)
+                  [None])                      # tags
+        types = (((tf.string, tf.int32),
+                  (tf.string, tf.int32)),
+                 tf.string)
+        defaults = ((('<pad>', 0),
+                     ('<pad>', 0)),
+                    '<O>')
+        dataset = tf.data.Dataset.from_generator(
+            functools.partial(generator_fn, words, tags),
+            output_shapes=shapes, output_types=types)
+
+        if shuffle_and_repeat:
+            dataset = dataset.shuffle(params['buffer']).repeat(params['epochs'])
+
+        dataset = (dataset
+                   .padded_batch(params.get('batch_size', 20), shapes, defaults)
+                   .prefetch(1))
+        return dataset
     # Estimator, train and evaluate
     train_inpf = functools.partial(input_fn, flags.input_data_file, flags.input_tags_file,
                                    params, shuffle_and_repeat=True)

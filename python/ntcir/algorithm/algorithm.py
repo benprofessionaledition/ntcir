@@ -68,32 +68,27 @@ def model_fn(features: tf.Tensor, labels: tf.Tensor, mode: tf.estimator.ModeKeys
 
     # using the underscore suffix to denote parameters defined externally
     vocab_file_ = params['vocab_file']
-    char_vocab_file_ = params['alphabet']
+    char_vocab_file_ = params['char_file']
     word_embedding_dim_ = params['word_embedding_dim']
     char_embedding_dim_ = params['char_embedding_dim']
-    tags_ = params['tags']  # list
+    tags_ = params['tags']
+    tags_file_ = params['tags_file']
     glove_location_ = params['glove_location']
     dropout_pct_ = params['dropout_pct']
-    use_gpu_ = params['gpu']
-    empty_tag_ = params['empty_tag']
-    num_oov_word_buckets_ = params['num_vocab_oov_buckets']  # num out-of-vocab buckets for hashing crap
+    use_gpu_ = params['use_gpu']
+    num_oov_word_buckets_ = params['num_oov_word_buckets']  # num out-of-vocab buckets for hashing crap
     num_oov_char_buckets_ = params['num_oov_char_buckets']
-    epochs_ = params['epochs']  # training param
-    batch_size_ = params['batch_size']  # training param
-    buffer_ = params['buffer']  # training param
     filters_ = params['filters']
     kernel_size_ = params['kernel_size']
     lstm_size_ = params['lstm_size']
 
     (words, nwords), (chars, nchars) = features
-    is_training = tf.constant(mode == tf.estimator.ModeKeys.TRAIN, dtype=tf.bool)
 
     # doing this index table thing from tf.contrib because this way it can do the padding and lookup on the fly
     vocab_words = tf.contrib.lookup.index_table_from_file(vocab_file_, num_oov_buckets=num_oov_word_buckets_)
-    vocab_chars = tf.contrib.lookup.index_table_from_file(char_vocab_file_, num_oov_buckets_=num_oov_char_buckets_)
-    label_indices = [i for i, t in enumerate(tags_) if t.strip() != empty_tag_]
+    vocab_chars = tf.contrib.lookup.index_table_from_file(char_vocab_file_, num_oov_buckets=num_oov_char_buckets_)
     num_tags = len(tags_)
-    with open(vocab_chars, 'rb') as chars_in:
+    with open(char_vocab_file_, 'rb') as chars_in:
         num_chars = sum(1 for _ in chars_in) + num_oov_char_buckets_
 
     with tf.variable_scope("char_embeddings"):
@@ -109,13 +104,13 @@ def model_fn(features: tf.Tensor, labels: tf.Tensor, mode: tf.estimator.ModeKeys
     with tf.variable_scope("word_embeddings"):
         word_ids = vocab_words.lookup(words)
         glove = np.load(glove_location_)['embeddings']
-        glove_stacked = np.vstack([glove, [0. * word_embedding_dim_]])
-        glove_tensor = tf.get_variable(glove_stacked, dtype=tf.float32, trainable=False)
+        glove_stacked = np.vstack([glove, [[0.] * word_embedding_dim_]])
+        glove_tensor = tf.Variable(glove_stacked, dtype=tf.float32, trainable=False)
         word_embeddings = tf.nn.embedding_lookup(glove_tensor, word_ids)
 
     with tf.variable_scope("word_char_embed_concat"):
         embeddings = tf.concat([word_embeddings, char_conv], axis=-1)
-        embeddings = tf.nn.dropout(embeddings, rate=dropout_pct_, training=is_training)
+        embeddings = tf.nn.dropout(embeddings, keep_prob=dropout_pct_)
 
     if use_gpu_:
         RNNCellType = tf.contrib.cudnn_rnn.CudnnLSTM
@@ -126,8 +121,8 @@ def model_fn(features: tf.Tensor, labels: tf.Tensor, mode: tf.estimator.ModeKeys
         time_major_embeddings = tf.transpose(embeddings, perm=[1, 0, 2])  # i guess
         lstm_fwd = RNNCellType(num_units=lstm_size_)
         lstm_bkwd = RNNCellType(num_units=lstm_size_)
-        (output_fwd, output_bkwd), (_, _) = tf.contrib.rnn.stack_bidirectional_dynamic_rnn(lstm_fwd, lstm_bkwd, time_major_embeddings, sequence_length=nwords, time_major=True)
-        output = tf.concat(output_fwd, output_bkwd, axis=-1)
+        (output_fwd, output_bkwd), (_, _) = tf.nn.bidirectional_dynamic_rnn(lstm_fwd, lstm_bkwd, time_major_embeddings, sequence_length=nwords, time_major=True, dtype=tf.float32)
+        output = tf.concat((output_fwd, output_bkwd), 2)
         output = tf.transpose(output, perm=[1, 0, 2])
 
     with tf.variable_scope("crf"):
@@ -137,8 +132,7 @@ def model_fn(features: tf.Tensor, labels: tf.Tensor, mode: tf.estimator.ModeKeys
 
     if mode == tf.estimator.ModeKeys.PREDICT:
         # Predictions
-        reverse_vocab_tags = tf.contrib.lookup.index_to_string_table_from_file(
-            params['tags'])
+        reverse_vocab_tags = tf.contrib.lookup.index_to_string_table_from_file(tags_file_)
         pred_strings = reverse_vocab_tags.lookup(tf.to_int64(pred_ids))
         predictions = {
             'pred_ids': pred_ids,
@@ -148,7 +142,7 @@ def model_fn(features: tf.Tensor, labels: tf.Tensor, mode: tf.estimator.ModeKeys
 
     else:
         # Loss
-        vocab_tags = tf.contrib.lookup.index_table_from_file(params['tags'])
+        vocab_tags = tf.contrib.lookup.index_table_from_file(tags_file_)
         tags = vocab_tags.lookup(labels)
         log_likelihood, _ = tf.contrib.crf.crf_log_likelihood(
             logits, tags, nwords, crf_params)
