@@ -250,3 +250,4 @@ pyvenv.cfg
 pip-selfcheck.json
 resources/ignored/*
 .idea
+/checkpoints/
