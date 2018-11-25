@@ -114,13 +114,15 @@ def model_fn(features: tf.Tensor, labels: tf.Tensor, mode: tf.estimator.ModeKeys
 
     if use_gpu_:
         RNNCellType = tf.contrib.cudnn_rnn.CudnnLSTM
+        cellkwargs={'num_units': lstm_size_, 'num_layers': 2} # idfk?
     else:
         RNNCellType = tf.contrib.cudnn_rnn.CudnnCompatibleLSTMCell
+        cellkwargs={'num_units': lstm_size_}
 
     with tf.variable_scope("bilstm"):
         time_major_embeddings = tf.transpose(embeddings, perm=[1, 0, 2])  # i guess
-        lstm_fwd = RNNCellType(lstm_size_)
-        lstm_bkwd = RNNCellType(lstm_size_)
+        lstm_fwd = RNNCellType(**cellkwargs)
+        lstm_bkwd = RNNCellType(**cellkwargs)
         (output_fwd, output_bkwd), (_, _) = tf.nn.bidirectional_dynamic_rnn(lstm_fwd, lstm_bkwd, time_major_embeddings, sequence_length=nwords, time_major=True, dtype=tf.float32)
         output = tf.concat((output_fwd, output_bkwd), 2)
         output = tf.transpose(output, perm=[1, 0, 2])
