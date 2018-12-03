@@ -11,13 +11,12 @@ log.propagate = False
 
 import json
 
-from ntcir.algorithm import algorithm
 
 import glob
 import functools
 from typing import Sequence
 from pathlib import Path
-from ntcir.algorithm import __version__
+from ntcir.algorithm import __version__, algorithm
 import tensorflow as tf
 from tensorflow.python import debug as tf_debug
 import os
@@ -53,6 +52,8 @@ def init_flags():
     # model specific hyperparams
     tf.flags.DEFINE_integer("word_embedding_dim", 300, "Word embedding dim (default: 300)")
     tf.flags.DEFINE_integer("char_embedding_dim", 50, "Character embedding dim (default: 50)")
+    tf.flags.DEFINE_integer("word_seq_max_length", 20, "Word sequence max length (default: 20)")
+    tf.flags.DEFINE_integer("char_seq_max_length", 256, "Char sequence max length (default: 256)")
     tf.flags.DEFINE_boolean("use_gpu", False, "Whether to use CUDNN libs (default: false)")
     tf.flags.DEFINE_integer("num_oov_char_buckets", 5, "Number of out-of-vocab character buckets (default: 5)")
     tf.flags.DEFINE_integer("num_oov_word_buckets", 100, "Number of out-of-vocab word buckets (default: 100)")
@@ -91,7 +92,7 @@ def create_run_hooks(flags) -> Sequence[tf.train.SessionRunHook]:
     :return: a summary saver and checkpoint saver run hook for a tf estimator
     """
     name = str(int(time.time())) + '-' + flags.name
-    log_dir = os.path.join(flags.logdir, name)
+    log_dir = os.path.join(flags.checkpoints, name)
     checkpoint_dir = os.path.join(flags.checkpoints, name)
     summary_hook = tf.train.SummarySaverHook(output_dir=log_dir, save_steps=1)
     checkpoint_hook = tf.train.CheckpointSaverHook(checkpoint_dir, save_steps=flags.evaluate_every)
@@ -111,7 +112,7 @@ def parse_fn(line_words, line_tags):
     chars = [c + [b'<pad>'] * (max_len - l) for c, l in zip(chars, lengths)]
     return ((words, len(words)), (chars, lengths)), tags
 
-def generator_fn(words, tags):
+def generator_fn(words, tags, word_padding=20, char_padding=256):
     with Path(words).open('r') as f_words, Path(tags).open('r') as f_tags:
         for line_words, line_tags in zip(f_words, f_tags):
             yield parse_fn(line_words, line_tags)
@@ -140,6 +141,9 @@ def most_recent_checkpoint(checkpoints, name):
 if __name__ == '__main__':
     init_flags()
     flags = tf.flags.FLAGS
+    if flags.use_gpu:
+        log.warning("Warning - GPU params are deprecated as they're currently nonfunctional")
+
     tf.logging.set_verbosity(tf.logging.DEBUG)
 
     runmode = run_modes[flags.mode]
@@ -157,8 +161,8 @@ if __name__ == '__main__':
     hooks = []
     # add debug hooks if specified
     if flags.debug:
-        hooks.append(tf_debug.LocalCLIDebugHook())
-        hooks.append(tf.train.LoggingTensorHook(tensors=['IteratorGetNext:0', 'IteratorGetNext:1'], every_n_iter=1))
+        # hooks.append(tf_debug.LocalCLIDebugHook())
+        hooks.append(tf.train.LoggingTensorHook(tensors=["char_convolution/masked_1d_conv/reshape_input/conv_input_shape:0"], every_n_iter=20))
 
     with open(flags.tags_file) as t_f:
         tags = t_f.readlines()
@@ -168,6 +172,8 @@ if __name__ == '__main__':
         'char_file' : flags.char_file,
         'word_embedding_dim' : flags.word_embedding_dim,
         'char_embedding_dim' : flags.char_embedding_dim,
+        'word_seq_maxlen' : flags.word_seq_max_length,
+        'char_seq_maxlen' : flags.char_seq_max_length,
         'tags' : tags,
         'tags_file' : flags.tags_file,
         'glove_location' : flags.glove_file,
@@ -189,13 +195,13 @@ if __name__ == '__main__':
     def input_fn(words, tags, params=None, shuffle_and_repeat=False):
         params = params if params is not None else {}
         shapes = ((([None], ()),               # (words, nwords)
-                   ([None, None], [None])),    # (chars, nchars)
-                  [None])                      # tags
+                    ([None, None], [None])),    # (chars, nchars)
+                   [None])                     # tags
         types = (((tf.string, tf.int32),
                   (tf.string, tf.int32)),
                  tf.string)
         defaults = ((('<pad>', 0),
-                     ('<pad>', 0)),
+                     ('?', 0)),
                     '<O>')
         dataset = tf.data.Dataset.from_generator(
             functools.partial(generator_fn, words, tags),
@@ -208,6 +214,7 @@ if __name__ == '__main__':
                    .padded_batch(params.get('batch_size', 20), shapes, defaults)
                    .prefetch(1))
         return dataset
+
     # Estimator, train and evaluate
     train_inpf = functools.partial(input_fn, flags.input_data_file, flags.input_tags_file,
                                    params, shuffle_and_repeat=True)
@@ -218,6 +225,7 @@ if __name__ == '__main__':
         model_fn=model_fn,
         config=cfg,
         params=params)
+
     Path(estimator.eval_dir()).mkdir(parents=True, exist_ok=True)
     train_spec = tf.estimator.TrainSpec(input_fn=train_inpf, hooks=hooks)
     eval_spec = tf.estimator.EvalSpec(input_fn=eval_inpf, throttle_secs=120, hooks=hooks)

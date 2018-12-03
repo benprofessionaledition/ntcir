@@ -1,70 +1,10 @@
 """
-Sequence Tagging Using CNN-BiLSTM-CRF
+Highway implementation
 """
-from functools import reduce
-
-import numpy as np
 import tensorflow as tf
+import numpy as np
 
-
-def masked_1dconv_max(t, weights, filters, kernel_size):
-    """Applies 1d convolution and a masked max-pooling
-
-    Parameters
-    ----------
-    t : tf.Tensor
-        A tensor with at least 3 dimensions [d1, d2, ..., dn-1, dn]
-    weights : tf.Tensor of tf.bool
-        A Tensor of shape [d1, d2, dn-1]
-    filters : int
-        number of filters
-    kernel_size : int
-        kernel size for the temporal convolution
-
-    Returns
-    -------
-    tf.Tensor
-        A tensor of shape [d1, d2, dn-1, filters]
-
-    """
-    # todo look closer at this
-    # Get shape and parameters
-    with tf.variable_scope("masked_1d_conv"):
-        with tf.variable_scope("reshape_input"):
-            shape = tf.shape(t, name="conv_input_shape") # [batch, nwords, nchars, char embedding]
-            ndims = t.shape.ndims
-            dim1 = reduce(lambda x, y: x * y, [shape[i] for i in range(ndims - 2)])  # skip embedding and nchars
-            dim2 = shape[-2]
-            dim3 = t.shape[-1]
-
-        with tf.variable_scope("reshape_weights"):
-            # Reshape weights
-            # weights: masking/padding layer of every row in the "nchars per word" tensor
-            weights = tf.reshape(weights, shape=[dim1, dim2, 1]) #
-            weights = tf.to_float(weights) # make them 0/1 instead of boolean
-
-        # Reshape input and apply weights
-        with tf.variable_scope("apply_weights_to_input"):
-            flat_shape = [dim1, dim2, dim3]
-            t = tf.reshape(t, shape=flat_shape)
-            t *= weights # effectively zeroing out the params we don't give a shit about, now that the sequence is padded?
-
-        with tf.variable_scope("apply_conv_and_weights"):
-            # Apply convolution
-            t_conv = tf.layers.conv1d(t, filters, kernel_size, padding='same')
-            t_conv *= weights # again, zeroing out what we don't care about, but why a second time?
-
-        with tf.variable_scope("reduce_max"):
-            # Reduce max -- set to zero if all padded
-            t_conv += (1. - weights) * tf.reduce_min(t_conv, axis=-2, keepdims=True)
-            t_max = tf.reduce_max(t_conv, axis=-2)
-
-        # Reshape the output
-        with tf.variable_scope("reshape_output"):
-            final_shape = [shape[i] for i in range(ndims - 2)] + [filters]
-            t_max = tf.reshape(t_max, shape=final_shape)
-
-    return t_max
+he_initializer = tf.contrib.keras.initializers.he_normal()
 
 
 def model_fn(features: tf.Tensor, labels: tf.Tensor, mode: tf.estimator.ModeKeys, params: dict) -> tf.estimator.EstimatorSpec:
@@ -90,7 +30,14 @@ def model_fn(features: tf.Tensor, labels: tf.Tensor, mode: tf.estimator.ModeKeys
     kernel_size_ = params['kernel_size']
     lstm_size_ = params['lstm_size']
 
+    char_seq_maxlen_ = params['char_seq_maxlen']
+    word_seq_maxlen = params['word_seq_maxlen']
+
     (words, nwords), (chars, nchars) = features
+
+    architecture = [2, 2, 2, 2]
+    filter_multiplier = 32
+    is_training = mode == tf.estimator.ModeKeys.TRAIN
 
     # doing this index table thing from tf.contrib because this way it can do the padding and lookup on the fly
     vocab_words = tf.contrib.lookup.index_table_from_file(vocab_file_, num_oov_buckets=num_oov_word_buckets_)
@@ -100,14 +47,80 @@ def model_fn(features: tf.Tensor, labels: tf.Tensor, mode: tf.estimator.ModeKeys
         num_chars = sum(1 for _ in chars_in) + num_oov_char_buckets_
 
     with tf.variable_scope("char_embeddings"):
+        # pad this motherbitch
         char_ids = vocab_chars.lookup(chars)
-        char_var = tf.get_variable('chars', [num_chars + 1, char_embedding_dim_], tf.float32)
-        char_embeddings = tf.nn.embedding_lookup(char_var, char_ids)  # !
+        embedding_W = tf.Variable(tf.random_uniform([num_chars, char_embedding_dim_], -1.0, 1.0),
+                                  name="embedding_W")
+        embedded_characters = tf.nn.embedding_lookup(embedding_W, char_ids)
+        embedded_characters_expanded = tf.expand_dims(embedded_characters, -1, name="embedding_input") # !
+        # embedded_characters_expanded = tf.transpose(embedded_characters_expanded, perm=[1,2,3,4,0])
+    with tf.variable_scope("convolutions"):
+        with tf.variable_scope("first_convolution"):
+            filter_shape = [3, char_embedding_dim_, 1, filter_multiplier]
+            w = tf.get_variable(name='W', shape=filter_shape,
+                                initializer=he_initializer)
+            conv = tf.nn.conv1d(embedded_characters_expanded, w, stride=char_embedding_dim_, padding="SAME")
+            b = tf.get_variable(name='b', shape=[filter_multiplier],
+                                initializer=tf.constant_initializer(0.0))
+            out = tf.nn.bias_add(conv, b)
+            first_conv = tf.nn.relu(out)
 
-    with tf.variable_scope("char_convolution"):
-        weights = tf.sequence_mask(nchars)
-        # masked convolution, so we can get rid of the stuff we don't care about
-        char_conv = masked_1dconv_max(char_embeddings, weights, filters_, kernel_size_)  # !
+        def __convolutional_block(inputs, num_layers, num_filters, name, is_training):
+            """
+            A convolutional block which will be initialized with varying parameters a few times in the network
+            :param inputs: the previous tensor
+            :param num_layers: the number of layers
+            :param num_filters: the number of filters
+            :param name: a name for the tf name scope
+            :param is_training: sets the 'is_training' parameter in the batch normalization
+            :return:
+            """
+            with tf.variable_scope("conv_block_%s" % name):
+                out = inputs
+                for i in range(0, num_layers):
+                    filter_shape = [3, 1, out.get_shape()[3], num_filters]
+                    w = tf.get_variable(name='W_' + str(i), shape=filter_shape,
+                                        initializer=he_initializer)
+                    b = tf.get_variable(name='b_' + str(i), shape=[num_filters],
+                                        initializer=tf.constant_initializer(0.0))
+                    conv = tf.nn.conv2d(out, w, strides=[1, 1, 1, 1], padding="SAME")
+                    conv = tf.nn.bias_add(conv, b)
+                    batch_norm = tf.contrib.layers.batch_norm(conv, center=True, scale=True, is_training=is_training)
+                    out = tf.nn.relu(batch_norm)
+                return out
+            # all convolutional blocks
+        conv_block_1 = __convolutional_block(first_conv, num_layers=architecture[0], num_filters=filter_multiplier * 1, name='1',
+                                             is_training=is_training)
+        pool1 = tf.nn.max_pool(conv_block_1, ksize=[1, 3, 1, 1], strides=[1, 2, 1, 1], padding='SAME',
+                               name="pool_1")
+
+        conv_block_2 = __convolutional_block(pool1, num_layers=architecture[1], num_filters=filter_multiplier * 2, name='2',
+                                             is_training=is_training)
+        pool2 = tf.nn.max_pool(conv_block_2, ksize=[1, 3, 1, 1], strides=[1, 2, 1, 1], padding='SAME',
+                               name="pool_2")
+
+        conv_block_3 = __convolutional_block(pool2, num_layers=architecture[2], num_filters=filter_multiplier * 4, name='3',
+                                             is_training=is_training)
+        pool3 = tf.nn.max_pool(conv_block_3, ksize=[1, 3, 1, 1], strides=[1, 2, 1, 1], padding='SAME',
+                               name="pool_3")
+
+        conv_block_4 = __convolutional_block(pool3, num_layers=architecture[3], num_filters=filter_multiplier * 8, name='4',
+                                             is_training=is_training)
+
+        pool4 = tf.nn.max_pool(conv_block_4, ksize=[1, 3, 1, 1], strides=[1, 2, 1, 1], padding='SAME',
+                               name="pool_4")
+        shape = int(np.prod(pool4.get_shape()[1:]))
+        conv_max_pool_out = tf.reshape(pool4, (-1, shape), name="conv_output")
+
+
+    # an fc layer cause why not
+    with tf.variable_scope("char_fc"):
+
+        fc_out_dim = 1024 #idfk
+
+        w = tf.get_variable('W_fc_aggregate', [conv_max_pool_out.get_shape()[1], fc_out_dim], initializer=he_initializer)
+        b = tf.get_variable('b_fc_aggregate', [fc_out_dim], initializer=he_initializer)
+        char_fc = tf.matmul(conv_max_pool_out, w) + b
 
     with tf.variable_scope("word_embeddings"):
         word_ids = vocab_words.lookup(words)
@@ -117,7 +130,7 @@ def model_fn(features: tf.Tensor, labels: tf.Tensor, mode: tf.estimator.ModeKeys
         word_embeddings = tf.nn.embedding_lookup(glove_tensor, word_ids)
 
     with tf.variable_scope("word_char_embed_concat"):
-        embeddings = tf.concat([word_embeddings, char_conv], axis=-1)
+        embeddings = tf.concat([word_embeddings, char_fc], axis=-1)
         embeddings = tf.nn.dropout(embeddings, keep_prob=dropout_pct_)
 
     # deprecating gpu support because it's Complicated(TM)
