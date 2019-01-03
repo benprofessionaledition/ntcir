@@ -40,8 +40,8 @@ def masked_1dconv_max(t, weights, filters, kernel_size):
         with tf.variable_scope("reshape_weights"):
             # Reshape weights
             # weights: masking/padding layer of every row in the "nchars per word" tensor
-            weights = tf.reshape(weights, shape=[dim1, dim2, 1]) #
-            weights = tf.to_float(weights) # make them 0/1 instead of boolean
+            weights = tf.reshape(weights, shape=[dim1, dim2, 1], name="weights_reshaped") #
+            weights = tf.to_float(weights, name="weights_float") # make them 0/1 instead of boolean
 
         # Reshape input and apply weights
         with tf.variable_scope("apply_weights_to_input"):

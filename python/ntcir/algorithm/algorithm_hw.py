@@ -52,9 +52,10 @@ def model_fn(features: tf.Tensor, labels: tf.Tensor, mode: tf.estimator.ModeKeys
         embedding_W = tf.Variable(tf.random_uniform([num_chars, char_embedding_dim_], -1.0, 1.0),
                                   name="embedding_W")
         embedded_characters = tf.nn.embedding_lookup(embedding_W, char_ids)
-        embedded_characters_expanded = tf.expand_dims(embedded_characters, -1, name="embedding_input") # !
-        # embedded_characters_expanded = tf.transpose(embedded_characters_expanded, perm=[1,2,3,4,0])
+        embedded_characters_expanded = tf.transpose(embedded_characters, perm=[1,2,3,4,0])
     with tf.variable_scope("convolutions"):
+        """ first reshape all this nonsense--needs to be [batch x maxlen x embedding x 1], right now it's like [batch x nwords x nchars x embedding x 1]"""
+        character_slice = tf.slice(embedded_characters_expanded, )
         with tf.variable_scope("first_convolution"):
             filter_shape = [3, char_embedding_dim_, 1, filter_multiplier]
             w = tf.get_variable(name='W', shape=filter_shape,

@@ -161,8 +161,8 @@ if __name__ == '__main__':
     hooks = []
     # add debug hooks if specified
     if flags.debug:
-        # hooks.append(tf_debug.LocalCLIDebugHook())
-        hooks.append(tf.train.LoggingTensorHook(tensors=["char_convolution/masked_1d_conv/reshape_input/conv_input_shape:0"], every_n_iter=20))
+        hooks.append(tf_debug.LocalCLIDebugHook())
+        hooks.append(tf.train.LoggingTensorHook(tensors=["char_convolution/masked_1d_conv/reshape_weights/weights_reshaped:0"], every_n_iter=20))
 
     with open(flags.tags_file) as t_f:
         tags = t_f.readlines()
