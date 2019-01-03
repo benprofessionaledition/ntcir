@@ -220,7 +220,11 @@ if __name__ == '__main__':
                                    params, shuffle_and_repeat=True)
     eval_inpf = functools.partial(input_fn, flags.eval_data_file, flags.eval_tags_file)
 
-    cfg = tf.estimator.RunConfig(save_checkpoints_secs=120)
+    cfg = tf.estimator.RunConfig(model_dir=checkpoint_dir,
+                                 save_summary_steps=100,
+                                 save_checkpoints_steps=flags.evaluate_every,
+                                 keep_checkpoint_max=3)
+
     estimator = tf.estimator.Estimator(
         model_fn=model_fn,
         config=cfg,
