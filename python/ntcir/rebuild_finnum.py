@@ -3,7 +3,7 @@
 """
 Created on Wed Jul 11 09:41:57 2018
 
-@author: chungchi <--- you suck at coding, "chungchi" <3 Ben
+@author: chungchi 
 """
 
 import logging
